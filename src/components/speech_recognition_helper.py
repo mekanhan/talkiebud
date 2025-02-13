@@ -17,6 +17,6 @@ def recognize_speech():
         except sr.UnknownValueError:
             print("Could not understand audio.")
             return "I couldn't understand what you said."
-        except sr.RequestError:
-            print("Speech Recognition service is down.")
-            return "I'm having trouble processing that."
+        except sr.RequestError as e:
+            print(f"Speech Recognition service error: {e}")
+            return "I'm having trouble processing that. Please check your internet connection."
