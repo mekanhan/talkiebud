@@ -1,7 +1,27 @@
-pip install -r requirements.txt # Install all dependencies
+# Deactivate the virtual environment if it's active
+deactivate
 
-pip freeze >> requirements.txt # Manually update requirements.txt
+# Remove the existing virtual environment
+rm -rf .venv
 
-source .venv/Scripts/activate # Activate the virtual environment
+# Create a new virtual environment
+python -m venv .venv
 
-python src/main.py # Run the main script
+# Activate the new virtual environment
+source .venv/Scripts/activate
+
+# Update pip and setuptools
+python -m pip install --upgrade pip
+pip install --upgrade setuptools
+
+# Install all dependencies
+pip install -r requirements.txt
+
+# Ensure the environment variables are loaded
+export $(grep -v '^#' .env | xargs)
+
+# Run the main script
+python src/main.py
+
+# Manually update requirements.txt
+pip freeze >> requirements.txt

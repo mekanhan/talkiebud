@@ -1,177 +1,141 @@
-import os
-import json
 import tkinter as tk
-from tkinter import ttk, scrolledtext
-from PIL import Image, ImageTk
 import threading
-import sounddevice as sd
-import numpy as np
-import random
+import sys
+import queue
 from components.chatbot import get_chatgpt_response
 from components.speech_recognition_helper import recognize_speech
 from components.text_to_speech import speak_text
+
+class ConsoleOutput:
+    """Redirects print statements to a Tkinter Text widget."""
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+        self.queue = queue.Queue()  # Buffer messages
+
+    def write(self, message):
+        """Send messages to the queue for GUI display."""
+        self.queue.put(message)
+
+    def flush(self):
+        """Flush method required for stdout redirection."""
+        pass
+
+    def update_console(self):
+        """Fetch messages from the queue and update the Text widget."""
+        while not self.queue.empty():
+            message = self.queue.get()
+            self.text_widget.insert(tk.END, message)
+            self.text_widget.see(tk.END)  # Auto-scroll to latest log
 
 class AICommunicationRobot:
     def __init__(self, root):
         self.root = root
         self.root.title("TalkieBud - AI Communication Robot")
-        self.root.geometry("400x700")  # Increased height to fit new features
-        self.root.resizable(False, False)  # Disable manual resizing
+        self.root.geometry("700x500")
+        self.root.configure(bg="#2C3E50")  # Dark blue-grey background
 
-        # Load face images with correct paths
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images"))
-        self.happy_face = ImageTk.PhotoImage(Image.open(os.path.join(base_path, "happy.png")).resize((300, 300)))
-        self.thinking_face = ImageTk.PhotoImage(Image.open(os.path.join(base_path, "thinking.png")).resize((300, 300)))
-        self.speaking_face = ImageTk.PhotoImage(Image.open(os.path.join(base_path, "speaking.png")).resize((300, 300)))
-        self.listening_face = ImageTk.PhotoImage(Image.open(os.path.join(base_path, "listening.png")).resize((300, 300)))
+        # Styling
+        button_style = {"font": ("Arial", 12), "fg": "white", "bg": "#3498DB", "padx": 10, "pady": 5, "bd": 3}
 
-        # Create GUI elements
-        self.label = tk.Label(root, text="Say 'Hey Bud' to start talking", font=("Arial", 14))
-        self.label.pack()
+        # Label - App Title
+        self.label = tk.Label(root, text="🤖 TalkieBud - AI Robot", font=("Arial", 16, "bold"), fg="white", bg="#2C3E50")
+        self.label.pack(pady=10)
 
-        self.face_label = tk.Label(root, image=self.happy_face)
-        self.face_label.pack()
+        self.listening = True
+        self.processing = False
+        self.lock = threading.Lock()
 
-        # Voice Visualization Canvas
-        self.voice_canvas = tk.Canvas(root, width=300, height=50, bg="black")
-        self.voice_canvas.pack()
-        
-        # Audio Input Stream with callback to update voice visualization
-        self.stream = sd.InputStream(callback=self.audio_callback, channels=1, samplerate=44100)
-        self.stream.start()
+        # **Control Buttons (Now in a frame)**
+        button_frame = tk.Frame(root, bg="#2C3E50")
+        button_frame.pack(pady=10)
 
-        # User Input Box (optional manual input)
-        tk.Label(root, text="User Input").pack()
-        self.user_input_box = scrolledtext.ScrolledText(root, height=3, wrap=tk.WORD)
-        self.user_input_box.pack(fill=tk.X, padx=10, pady=5)
+        self.start_button = tk.Button(button_frame, text="Start App", command=self.start_app, **button_style)
+        self.start_button.grid(row=0, column=0, padx=10)
 
-        # Robot Output Box
-        tk.Label(root, text="TalkieBud's Response").pack()
-        self.robot_output_box = scrolledtext.ScrolledText(root, height=3, wrap=tk.WORD, state=tk.DISABLED)
-        self.robot_output_box.pack(fill=tk.X, padx=10, pady=5)
+        self.toggle_button = tk.Button(button_frame, text="Stop App", command=self.stop_app, **button_style)
+        self.toggle_button.grid(row=0, column=1, padx=10)
 
-        # Humor Level Slider
-        tk.Label(root, text="Humor Level").pack()
-        self.humor_slider = ttk.Scale(root, from_=0, to=100, orient="horizontal", length=200)
-        self.humor_slider.set(50)
-        self.humor_slider.pack()
+        # **Voice Selection Dropdown**
+        self.available_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        self.selected_voice = tk.StringVar(value="nova")  # Default voice
 
-        # Drama Level Slider
-        tk.Label(root, text="Drama Level").pack()
-        self.drama_slider = ttk.Scale(root, from_=0, to=100, orient="horizontal", length=200)
-        self.drama_slider.set(50)
-        self.drama_slider.pack()
+        voice_frame = tk.Frame(root, bg="#2C3E50")
+        voice_frame.pack(pady=10)
 
-        # Child Mode Toggle
-        self.child_mode_var = tk.BooleanVar()
-        self.child_mode_checkbox = tk.Checkbutton(root, text="Child Mode", variable=self.child_mode_var)
-        self.child_mode_checkbox.pack()
+        self.voice_label = tk.Label(voice_frame, text="🎙️ Select Voice:", font=("Arial", 12), fg="white", bg="#2C3E50")
+        self.voice_label.grid(row=0, column=0, padx=5)
 
-        # Random Mode Toggle (default: OFF)
-        self.random_mode_var = tk.BooleanVar(value=False)
-        self.random_mode_checkbox = tk.Checkbutton(root, text="Random Mode (Idle Actions)", variable=self.random_mode_var)
-        self.random_mode_checkbox.pack()
+        self.voice_dropdown = tk.OptionMenu(voice_frame, self.selected_voice, *self.available_voices)
+        self.voice_dropdown.config(font=("Arial", 12), bg="#3498DB", fg="white", width=10)
+        self.voice_dropdown.grid(row=0, column=1, padx=5)
 
-        # Idle Timer settings
-        self.idle_time = 0
-        self.max_idle_time = 180  # 3 minutes (180 seconds)
-        self.random_action_count = 0
-        self.max_random_actions = 3  # Max 3 random actions before stopping
+        # **Console Output Box**
+        self.console_text = tk.Text(root, height=12, width=80, bg="#1C2833", fg="white", font=("Arial", 10), wrap="word")
+        self.console_text.pack(pady=10, padx=10)
 
-        # Start monitoring idle time every second
-        self.root.after(1000, self.monitor_idle)
+        # Redirect print output to console widget
+        self.console_output = ConsoleOutput(self.console_text)
+        sys.stdout = self.console_output
 
-        # Load Random Actions from JSON file
-        self.random_actions = self.load_random_actions()
+        # Start updating logs
+        self.update_console_output()
 
-        # Conversation Loop: automatically listen for user speech every second
-        self.listening = False
+        # Start listening loop
         self.root.after(1000, self.auto_listen)
-    
-    def audio_callback(self, indata, frames, time, status):
-        """Updates the voice visualization based on real-time microphone input."""
-        if status:
-            print(status)
-        volume = np.linalg.norm(indata) * 10
-        bar_height = min(int(volume), 50)
-        self.voice_canvas.delete("all")
-        self.voice_canvas.create_rectangle(50, 50 - bar_height, 250, 50, fill="green")
 
-    def load_random_actions(self):
-        """Load random actions from JSON file; fallback to an empty list if missing."""
-        actions_file = os.path.join(os.path.dirname(__file__), "random_actions.json")
-        if os.path.exists(actions_file):
-            with open(actions_file, "r", encoding="utf-8") as file:
-                data = json.load(file)
-                return data.get("actions", [])
-        return []
+    def stop_app(self):
+        """Fully stops the app's processes but keeps GUI open."""
+        print("⚠️ Stopping AI communication...")
+        self.listening = False
+        self.processing = False
+        self.label.config(text="🔴 App Stopped")
 
-    def monitor_idle(self):
-        """Checks for inactivity and, if in random mode, performs a random action."""
-        self.idle_time += 1
-
-        if (self.random_mode_var.get() and 
-            self.idle_time >= self.max_idle_time and 
-            self.random_action_count < self.max_random_actions):
-            
-            if self.random_actions:
-                action = random.choice(self.random_actions)
-                # Update face to thinking while performing a random action
-                self.face_label.config(image=self.thinking_face)
-                self.update_robot_text(action)
-                speak_text(action)
-                self.random_action_count += 1
-                self.idle_time = 0  # Reset idle timer after performing an action
-
-        self.root.after(1000, self.monitor_idle)
+    def start_app(self):
+        """Restarts the process by re-enabling listening."""
+        print("✅ Restarting AI communication...")
+        self.listening = True
+        self.label.config(text="🟢 App Running")
 
     def auto_listen(self):
-        """Automatically starts the conversation process if not already listening."""
-        if not self.listening:
-            self.listening = True
-            threading.Thread(target=self.process_conversation, daemon=True).start()
-        self.root.after(1000, self.auto_listen)
+        """Continuously listens when enabled, but only one process at a time."""
+        if self.listening and not self.processing:
+            thread = threading.Thread(target=self.process_conversation, daemon=True)
+            thread.start()
+
+        self.root.after(2000, self.auto_listen)
 
     def process_conversation(self):
-        """Handles the conversation process with the user."""
-        self.idle_time = 0
-        self.random_action_count = 0
+        """Handles voice recognition and AI response."""
+        with self.lock:
+            if not self.listening or self.processing:
+                return
 
-        # Update face to indicate listening
-        self.face_label.config(image=self.listening_face)
-        user_text = recognize_speech()
+            self.processing = True
+            print("🎙 Listening for speech...")
 
-        if user_text:
-            # Update face to thinking while processing the response
-            self.face_label.config(image=self.thinking_face)
-            response_text = get_chatgpt_response(
-                user_text,
-                int(self.humor_slider.get()),
-                int(self.drama_slider.get()),
-                self.child_mode_var.get()
-            )
-            self.update_robot_text(response_text)
-            # Update face to speaking while delivering the response
-            self.face_label.config(image=self.speaking_face)
-            speak_text(response_text)
-        
-        # Return face to the default happy state after conversation
-        self.face_label.config(image=self.happy_face)
-        self.listening = False
+            user_text = recognize_speech()
+            if user_text:
+                print(f"👤 User said: {user_text}")
+                
+                # Get selected voice from the dropdown
+                selected_voice = self.selected_voice.get()
+                print(f"🗣 Using voice: {selected_voice}")
 
-    def update_robot_text(self, response_text):
-        """Updates the GUI text box with the robot's response."""
-        self.robot_output_box.config(state=tk.NORMAL)
-        self.robot_output_box.delete("1.0", tk.END)
-        self.robot_output_box.insert(tk.END, response_text)
-        self.robot_output_box.config(state=tk.DISABLED)
+                response_text, speech_file = get_chatgpt_response(user_text)
+                print(f"🤖 AI Response: {response_text}")
+                speak_text(response_text, selected_voice)
 
+            self.processing = False  # Allow next cycle
+
+    def update_console_output(self):
+        """Continuously update console output in GUI."""
+        self.console_output.update_console()  # Fetch messages
+        self.root.after(100, self.update_console_output)  # Keep refreshing every 100ms
 
 def launch_app():
     root = tk.Tk()
-    app = AICommunicationRobot(root)
+    AICommunicationRobot(root)
     root.mainloop()
-
 
 if __name__ == "__main__":
     launch_app()

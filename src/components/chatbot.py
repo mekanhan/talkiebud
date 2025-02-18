@@ -1,33 +1,27 @@
-import openai  
+import openai
 import os
 from dotenv import load_dotenv
 
-# Load environment variables
-dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")  # Adjust if needed
+# Load API key
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path)
-
-# Get API Key
 api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    raise ValueError("API Key is missing! Make sure .env file is set up correctly.")
+    raise ValueError("API Key is missing! Check .env file.")
 
-def get_chatgpt_response(user_text, humor_level=50, drama_level=50, child_mode=False):
+def get_chatgpt_response(user_text, voice="nova"):
     """
-    Generates a ChatGPT response based on user input and UI settings.
+    Generates a concise, humorous, and intelligent ChatGPT response (max 2 sentences).
     """
-
     system_instruction = (
-        "You are a unique AI robot with personality. "
-        f"Humor level: {humor_level}%. Drama level: {drama_level}%. "
-        f"{'Use simple words, avoid sarcasm, and be extra enthusiastic.' if child_mode else ''} "
-        f"{'If drama is high, exaggerate everything, add suspense, and act like every situation is life-changing.' if drama_level > 50 else ''} "
-        f"{'If humor is high, be witty and throw in some light jokes.' if humor_level > 50 else ''}"
+        "You are TalkieBud, an intelligent and humorous AI assistant. "
+        "Keep responses **short (maximum 2 sentences)**, precise, and engaging. "
+        "Be **on point**, insightful, and witty while avoiding unnecessary details."
     )
 
     try:
         client = openai.OpenAI(api_key=api_key)
-
         response = client.chat.completions.create(
             model="gpt-4-turbo",
             messages=[
@@ -36,13 +30,32 @@ def get_chatgpt_response(user_text, humor_level=50, drama_level=50, child_mode=F
             ]
         )
 
-        return response.choices[0].message.content
+        chat_response = response.choices[0].message.content
+        speech_file = speak_text(chat_response, voice)
 
-    except openai.AuthenticationError:
-        return "⚠️ Authentication failed! Please check your API key."
-
-    except openai.OpenAIError as e:
-        return f"⚠️ OpenAI API Error: {str(e)}"
+        return chat_response, speech_file
 
     except Exception as e:
-        return f"⚠️ Unexpected Error: {str(e)}"
+        return f"⚠️ OpenAI API Error: {str(e)}", None
+
+
+def speak_text(text, voice="nova"):
+    """
+    Converts ChatGPT response to speech using OpenAI's TTS.
+    """
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=text
+        )
+
+        audio_file_path = os.path.join(os.path.dirname(__file__), "..", "output_audio.mp3")
+        with open(audio_file_path, "wb") as audio_file:
+            audio_file.write(response.content)
+
+        return audio_file_path
+
+    except Exception as e:
+        return f"⚠️ OpenAI API Error: {str(e)}"
