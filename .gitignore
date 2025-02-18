@@ -10,3 +10,5 @@ __pycache__/
 Thumbs.db
 
 src/.env
+
+src/components/build
